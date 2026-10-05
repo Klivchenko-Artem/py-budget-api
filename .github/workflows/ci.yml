@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: Линтер, миграции и тесты
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: budget
+          POSTGRES_PASSWORD: budget
+          POSTGRES_DB: budget
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U budget"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://budget:budget@localhost:5432/budget
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET: секрет-для-прогона-в-ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Поднять Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Поставить зависимости
+        run: pip install -r requirements-dev.txt
+
+      - name: Линтер
+        run: ruff check .
+
+      - name: Накатить миграции на чистую базу
+        # Заодно проверяет, что миграции вообще применяются: тесты поднимают
+        # схему метаданными и такую поломку бы не заметили
+        run: alembic upgrade head
+
+      - name: Откатить и накатить снова
+        run: |
+          alembic downgrade base
+          alembic upgrade head
+
+      - name: Тесты
+        env:
+          DATABASE_URL: postgresql+asyncpg://budget:budget@localhost:5432/budget_test
+          REDIS_URL: redis://localhost:6379/1
+        run: pytest

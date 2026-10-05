@@ -1,0 +1,54 @@
+services:
+  api:
+    build: .
+    entrypoint: ["./entrypoint.sh"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      # Порт на хосте можно подвинуть: HTTP_PORT=8001 docker compose up -d
+      - "${HTTP_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://budget:budget@postgres:5432/budget"
+      REDIS_URL: "redis://redis:6379/0"
+      # Для стенда сойдёт, на проде секрет приходит из хранилища секретов
+      JWT_SECRET: "локальный-секрет-для-стенда"
+      ACCESS_TOKEN_TTL_MINUTES: "1440"
+      REPORT_CACHE_TTL_SECONDS: "300"
+    volumes:
+      # Код подключён томом: правки видны без пересборки, а миграции,
+      # сгенерированные внутри контейнера, остаются на хосте
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: budget
+      POSTGRES_PASSWORD: budget
+      POSTGRES_DB: budget
+    ports:
+      # Порт нестандартный, чтобы не спорить с другими стендами на машине
+      - "${POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U budget"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pgdata:
